@@ -1,16 +1,12 @@
 {
   "http_port": 8080,
-  "nodes": [
-    "localhost:8080",
-    "localhost:8081",
-    "localhost:8082"
-  ],
+  "nodes": ["localhost:8081", "localhost:8082"],
   "replica_count": 2,
-  "data_dir": "./data",
+  "data_dir": "./test-data",
   "auth": {
-    "enabled": true,
-    "private_key": "<YOUR_PRIVATE_KEY>",
-    "public_key": "<YOUR_PUBLIC_KEY>",
+    "enabled": false,
+    "private_key": "<TEST_PRIVATE_KEY>",
+    "public_key": "<TEST_PUBLIC_KEY>",
     "token_duration": 3600,
     "default_roles": ["read", "write"]
   },

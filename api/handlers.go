@@ -1,6 +1,7 @@
 package api
 
 import (
+	"distore/auth"
 	"distore/replication"
 	"distore/storage"
 	"encoding/json"
@@ -10,18 +11,20 @@ import (
 )
 
 type Handlers struct {
-	storage    storage.Storage
-	replicator *replication.Replicator
+	storage     storage.Storage
+	replicator  replication.ReplicatorInterface
+	authService *auth.AuthService
 }
 
-func NewHandlers(storage storage.Storage, replicator *replication.Replicator) *Handlers {
+func NewHandlers(storage storage.Storage, replicator replication.ReplicatorInterface, authService *auth.AuthService) *Handlers {
 	return &Handlers{
-		storage:    storage,
-		replicator: replicator,
+		storage:     storage,
+		replicator:  replicator,
+		authService: authService,
 	}
 }
 
-// Handler for setting values
+// Handler for setting the value
 func (h *Handlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -39,16 +42,20 @@ func (h *Handlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.storage.Set(kv.Key, kv.Value); err != nil {
-		log.Printf("Error setting key %s: %v", kv.Key, err)
+	// Add tenant prefix if necessary
+	tenantKey := h.getTenantKey(r, kv.Key)
+
+	if err := h.storage.Set(tenantKey, kv.Value); err != nil {
+		log.Printf("Error setting key %s: %v", tenantKey, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	// Asynchronous replication
 	go func() {
-		if err := h.replicator.ReplicateSet(kv.Key, kv.Value); err != nil {
-			log.Printf("Replication error for key %s: %v", kv.Key, err)
+		if err := h.replicator.ReplicateSet(tenantKey, kv.Value); err != nil {
+			log.Printf("Replication error for key %s: %v", tenantKey, err)
+			// Not fatal - just logging
 		}
 	}()
 
@@ -75,12 +82,15 @@ func (h *Handlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	key := pathParts[2]
 
-	value, err := h.storage.Get(key)
+	// Add tenant prefix if necessary
+	tenantKey := h.getTenantKey(r, key)
+
+	value, err := h.storage.Get(tenantKey)
 	if err != nil {
 		if err == storage.ErrKeyNotFound {
 			http.Error(w, "Key not found", http.StatusNotFound)
 		} else {
-			log.Printf("Error getting key %s: %v", key, err)
+			log.Printf("Error getting key %s: %v", tenantKey, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 		return
@@ -93,7 +103,7 @@ func (h *Handlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Remove blocking replication
+// Handler for deleting a value
 func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -107,11 +117,14 @@ func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	key := pathParts[2]
 
-	if err := h.storage.Delete(key); err != nil {
+	// Add tenant prefix if necessary
+	tenantKey := h.getTenantKey(r, key)
+
+	if err := h.storage.Delete(tenantKey); err != nil {
 		if err == storage.ErrKeyNotFound {
 			http.Error(w, "Key not found", http.StatusNotFound)
 		} else {
-			log.Printf("Error deleting key %s: %v", key, err)
+			log.Printf("Error deleting key %s: %v", tenantKey, err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 		}
 		return
@@ -119,8 +132,8 @@ func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Asynchronous replication without waiting
 	go func() {
-		if err := h.replicator.ReplicateDelete(key); err != nil {
-			log.Printf("Replication warning for delete key %s: %v", key, err)
+		if err := h.replicator.ReplicateDelete(tenantKey); err != nil {
+			log.Printf("Replication warning for delete key %s: %v", tenantKey, err)
 			// Not fatal - just logging
 		}
 	}()
@@ -129,6 +142,54 @@ func (h *Handlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "deleted",
 		"key":    key,
+	})
+}
+
+// Helper function for getting a key given a tenant
+func (h *Handlers) getTenantKey(r *http.Request, key string) string {
+	if h.authService == nil {
+		return key
+	}
+
+	claims, ok := r.Context().Value("claims").(*auth.Claims)
+	if ok && claims.TenantID != "" {
+		return claims.TenantID + ":" + key
+	}
+	return key
+}
+
+// Handler for receiving a token
+func (h *Handlers) TokenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		UserID   string   `json:"user_id"`
+		Password string   `json:"password"`
+		TenantID string   `json:"tenant_id"`
+		Roles    []string `json:"roles"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// There should be a real credential check here
+	// Simply generate a token for the demo
+	token, err := h.authService.GenerateToken(req.UserID, req.TenantID, req.Roles)
+	if err != nil {
+		http.Error(w, "Error generating token: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"token":      token,
+		"token_type": "Bearer",
+		"expires_in": "3600",
 	})
 }
 
