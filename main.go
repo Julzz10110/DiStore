@@ -47,6 +47,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("Error creating auth service: %v", err)
 		}
+		log.Printf("Authentication enabled")
+	} else {
+		log.Printf("Authentication disabled")
 	}
 
 	// Init handlers
@@ -58,6 +61,8 @@ func main() {
 	public := router.PathPrefix("").Subrouter()
 	public.Use(auth.PublicMiddleware)
 	public.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
+
+	router.HandleFunc("/auth/token", handlers.TokenHandler).Methods("POST")
 
 	// Auth endpoints
 	if cfg.Auth.Enabled {

@@ -165,6 +165,12 @@ func (h *Handlers) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if authService is initialized
+	if h.authService == nil {
+		http.Error(w, "Authentication service is not available", http.StatusServiceUnavailable)
+		return
+	}
+
 	var req struct {
 		UserID   string   `json:"user_id"`
 		Password string   `json:"password"`
@@ -177,8 +183,12 @@ func (h *Handlers) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// There should be a real credential check here
-	// Simply generate a token for the demo
+	// Check required fields
+	if req.UserID == "" || req.TenantID == "" || len(req.Roles) == 0 {
+		http.Error(w, "user_id, tenant_id and roles are required", http.StatusBadRequest)
+		return
+	}
+
 	token, err := h.authService.GenerateToken(req.UserID, req.TenantID, req.Roles)
 	if err != nil {
 		http.Error(w, "Error generating token: "+err.Error(), http.StatusInternalServerError)

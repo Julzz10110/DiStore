@@ -10,16 +10,18 @@ import (
 )
 
 func main() {
-	// Generate a private key
+	// Generate private key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error generating private key: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Save a private key
-	privateKeyFile, err := os.Create("private.pem")
+	// Save private key
+	privateKeyFile, err := os.Create("test_private.pem")
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error creating private key file: %v\n", err)
+		os.Exit(1)
 	}
 	defer privateKeyFile.Close()
 
@@ -29,19 +31,22 @@ func main() {
 	}
 
 	if err := pem.Encode(privateKeyFile, privateKeyPEM); err != nil {
-		panic(err)
+		fmt.Printf("Error encoding private key: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Save the public key
-	publicKeyFile, err := os.Create("public.pem")
+	// Save public key
+	publicKeyFile, err := os.Create("test_public.pem")
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error creating public key file: %v\n", err)
+		os.Exit(1)
 	}
 	defer publicKeyFile.Close()
 
 	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error marshaling public key: %v\n", err)
+		os.Exit(1)
 	}
 
 	publicKeyPEM := &pem.Block{
@@ -50,10 +55,21 @@ func main() {
 	}
 
 	if err := pem.Encode(publicKeyFile, publicKeyPEM); err != nil {
-		panic(err)
+		fmt.Printf("Error encoding public key: %v\n", err)
+		os.Exit(1)
 	}
 
-	fmt.Println("Keys generated successfully:")
-	fmt.Println("Private key: private.pem")
-	fmt.Println("Public key: public.pem")
+	fmt.Println("✅ Test keys generated successfully:")
+	fmt.Println("   Private key: test_private.pem")
+	fmt.Println("   Public key:  test_public.pem")
+	fmt.Println("")
+	fmt.Println("📋 Add these keys to your config.json:")
+	fmt.Println("")
+	fmt.Println(`{
+  "auth": {
+    "enabled": true,
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----...",`)
+	fmt.Println(`    "public_key": "-----BEGIN RSA PUBLIC KEY-----..."`)
+	fmt.Println(`  }
+}`)
 }
