@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,19 +15,29 @@ import (
 	"distore/api"
 	"distore/auth"
 	"distore/config"
+	"distore/monitoring"
 	"distore/replication"
 	"distore/storage"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
-	cfg, err := config.LoadConfig("config.test.json")
+	// Parse command line arguments
+	configFile := flag.String("config", "config.json", "Path to config file")
+	flag.Parse()
+
+	// Load configuration
+	cfg, err := config.LoadConfig(*configFile)
 	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
+		log.Fatalf("Error loading config from %s: %v", *configFile, err)
 	}
 
-	// Init store
+	// Set up logging
+	monitoring.SetupLogger()
+
+	// Init storage
 	var store storage.Storage
 	if cfg.DataDir != "" {
 		store, err = storage.NewDiskStorage(cfg.DataDir)
@@ -41,41 +53,59 @@ func main() {
 	replicator := replication.NewReplicator(cfg.Nodes, cfg.ReplicaCount)
 
 	// Init authentication
-	var authService *auth.AuthService
+	var authService auth.AuthServiceInterface
 	if cfg.Auth.Enabled {
 		authService, err = auth.NewAuthService(&cfg.Auth)
 		if err != nil {
-			log.Fatalf("Error creating auth service: %v", err)
+			log.Printf("Warning: using simple auth service due to error: %v", err)
+			authService = auth.NewSimpleAuthService(cfg.Auth.TokenDuration)
 		}
 		log.Printf("Authentication enabled")
 	} else {
+		authService = nil
 		log.Printf("Authentication disabled")
 	}
+
+	// Init metrics
+	metrics := monitoring.NewMetrics()
+	healthChecker := monitoring.NewHealthChecker(store, replicator)
 
 	// Init handlers
 	handlers := api.NewHandlers(store, replicator, authService)
 
 	router := mux.NewRouter()
 
-	// Public endpoints - access without authentication
-	public := router.PathPrefix("").Subrouter()
-	public.Use(auth.PublicMiddleware)
-	public.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
+	// Metrics endpoint
+	router.Handle("/metrics", metrics.Handler()).Methods("GET")
 
-	router.HandleFunc("/auth/token", handlers.TokenHandler).Methods("POST")
+	// Health endpoints
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		// Simple health check
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}).Methods("GET")
+
+	router.HandleFunc("/health/details", healthChecker.Handler).Methods("GET")
+
+	// Public endpoints
+	public := router.PathPrefix("").Subrouter()
+	public.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
 
 	// Auth endpoints
 	if cfg.Auth.Enabled {
 		public.HandleFunc("/auth/token", handlers.TokenHandler).Methods("POST")
 	}
 
-	// Protected endpoints - require authentication
+	// Protected endpoints
 	protected := router.PathPrefix("").Subrouter()
-	if cfg.Auth.Enabled {
+	if cfg.Auth.Enabled && authService != nil {
 		protected.Use(auth.AuthMiddleware(authService))
 		protected.Use(auth.RBACMiddleware(auth.RoleRead))
 		protected.Use(auth.TenantMiddleware)
 		protected.Use(auth.KeyAccessMiddleware)
+	} else {
+		// use public middleware if authentication is disabled
+		protected.Use(auth.PublicMiddleware)
 	}
 
 	protected.HandleFunc("/set", handlers.SetHandler).Methods("POST")
@@ -83,13 +113,26 @@ func main() {
 	protected.HandleFunc("/delete/{key}", handlers.DeleteHandler).Methods("DELETE")
 	protected.HandleFunc("/keys", handlers.GetAllHandler).Methods("GET")
 
-	// Internal endpoints for replication - access without authentication
+	// Internal endpoints for replication
 	internal := router.PathPrefix("/internal").Subrouter()
-	internal.Use(auth.PublicMiddleware)
 	internal.HandleFunc("/set", handlers.InternalSetHandler).Methods("POST")
 	internal.HandleFunc("/delete/{key}", handlers.InternalDeleteHandler).Methods("DELETE")
 
+	// Middleware chain
+	router.Use(monitoring.LoggerMiddleware)
+	router.Use(createMetricsMiddleware(metrics))
 	router.Use(loggingMiddleware)
+
+	// Run background tasks for metrics
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			metrics.UpdateStorageMetrics(store)
+			metrics.UpdateReplicationMetrics(replicator)
+		}
+	}()
 
 	// Launch the server
 	server := &http.Server{
@@ -97,7 +140,7 @@ func main() {
 		Handler: router,
 	}
 
-	// Run Prometheus metrics if enabled
+	// Run Prometheus metrics (if enabled)
 	if cfg.PrometheusPort > 0 {
 		go startPrometheusMetrics(cfg.PrometheusPort)
 	}
@@ -110,6 +153,8 @@ func main() {
 		if cfg.Auth.Enabled {
 			log.Printf("Authentication enabled")
 		}
+		log.Printf("Metrics available on /metrics")
+		log.Printf("Health checks available on /health and /health/details")
 
 		var err error
 		if cfg.TLS.Enabled {
@@ -123,6 +168,7 @@ func main() {
 		}
 	}()
 
+	// Wait for signals for a graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -138,8 +184,35 @@ func main() {
 	log.Println("Server exited")
 }
 
+// createMetricsMiddleware creates middleware for collecting metrics
+func createMetricsMiddleware(metrics *monitoring.Metrics) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			// Create ResponseWriter to intercept the status
+			rw := &monitoring.ResponseWriter{ResponseWriter: w, StatusCode: 200}
+
+			next.ServeHTTP(rw, r)
+
+			duration := time.Since(start)
+			metrics.ObserveRequest(r.Method, r.URL.Path, rw.StatusCode, duration)
+
+			if rw.StatusCode >= 400 {
+				errorType := "client_error"
+				if rw.StatusCode >= 500 {
+					errorType = "server_error"
+				}
+				metrics.ObserveError(r.Method, r.URL.Path, errorType)
+			}
+		})
+	}
+}
+
 func startPrometheusMetrics(port int) {
+	http.Handle("/metrics", promhttp.Handler())
 	log.Printf("Prometheus metrics available on :%d/metrics", port)
+	http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

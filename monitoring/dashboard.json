@@ -1,0 +1,53 @@
+{
+  "title": "Distore Dashboard",
+  "panels": [
+    {
+      "title": "HTTP Requests",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(http_requests_total[5m])",
+          "legendFormat": "{{method}} {{path}}"
+        }
+      ]
+    },
+    {
+      "title": "Request Duration",
+      "type": "graph", 
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95 latency"
+        }
+      ]
+    },
+    {
+      "title": "Error Rate",
+      "type": "graph",
+      "targets": [
+        {
+          "expr": "rate(http_errors_total[5m])",
+          "legendFormat": "{{error_type}}"
+        }
+      ]
+    },
+    {
+      "title": "Storage Size",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "storage_size_bytes"
+        }
+      ]
+    },
+    {
+      "title": "Nodes Online",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "nodes_online_total"
+        }
+      ]
+    }
+  ]
+}

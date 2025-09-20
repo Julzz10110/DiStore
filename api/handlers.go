@@ -13,10 +13,10 @@ import (
 type Handlers struct {
 	storage     storage.Storage
 	replicator  replication.ReplicatorInterface
-	authService *auth.AuthService
+	authService auth.AuthServiceInterface
 }
 
-func NewHandlers(storage storage.Storage, replicator replication.ReplicatorInterface, authService *auth.AuthService) *Handlers {
+func NewHandlers(storage storage.Storage, replicator replication.ReplicatorInterface, authService auth.AuthServiceInterface) *Handlers {
 	return &Handlers{
 		storage:     storage,
 		replicator:  replicator,
@@ -152,7 +152,7 @@ func (h *Handlers) getTenantKey(r *http.Request, key string) string {
 	}
 
 	claims, ok := r.Context().Value("claims").(*auth.Claims)
-	if ok && claims.TenantID != "" {
+	if ok && claims != nil && claims.TenantID != "" {
 		return claims.TenantID + ":" + key
 	}
 	return key
@@ -165,15 +165,14 @@ func (h *Handlers) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if authService is initialized
+	// If authentication is disabled
 	if h.authService == nil {
-		http.Error(w, "Authentication service is not available", http.StatusServiceUnavailable)
+		http.Error(w, "Authentication is disabled", http.StatusServiceUnavailable)
 		return
 	}
 
 	var req struct {
 		UserID   string   `json:"user_id"`
-		Password string   `json:"password"`
 		TenantID string   `json:"tenant_id"`
 		Roles    []string `json:"roles"`
 	}
@@ -184,9 +183,15 @@ func (h *Handlers) TokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check required fields
-	if req.UserID == "" || req.TenantID == "" || len(req.Roles) == 0 {
-		http.Error(w, "user_id, tenant_id and roles are required", http.StatusBadRequest)
+	if req.UserID == "" {
+		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
+	}
+	if req.TenantID == "" {
+		req.TenantID = "default"
+	}
+	if len(req.Roles) == 0 {
+		req.Roles = []string{"read", "write"}
 	}
 
 	token, err := h.authService.GenerateToken(req.UserID, req.TenantID, req.Roles)
