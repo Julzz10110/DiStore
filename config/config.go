@@ -19,14 +19,22 @@ type TLSConfig struct {
 	KeyFile  string `json:"key_file"`
 }
 
+type ReplicationConfig struct {
+	WriteQuorum          int    `json:"write_quorum"`
+	ReadQuorum           int    `json:"read_quorum"`
+	HintedHandoffEnabled bool   `json:"hinted_handoff_enabled"`
+	ConflictResolution   string `json:"conflict_resolution"` // "lww" or "vector"
+}
+
 type Config struct {
-	HTTPPort       int        `json:"http_port"`
-	Nodes          []string   `json:"nodes"`
-	ReplicaCount   int        `json:"replica_count"`
-	DataDir        string     `json:"data_dir"`
-	Auth           AuthConfig `json:"auth"`
-	TLS            TLSConfig  `json:"tls"`
-	PrometheusPort int        `json:"prometheus_port"`
+	HTTPPort       int               `json:"http_port"`
+	Nodes          []string          `json:"nodes"`
+	ReplicaCount   int               `json:"replica_count"`
+	DataDir        string            `json:"data_dir"`
+	Auth           AuthConfig        `json:"auth"`
+	TLS            TLSConfig         `json:"tls"`
+	PrometheusPort int               `json:"prometheus_port"`
+	Replication    ReplicationConfig `json:"replication"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
