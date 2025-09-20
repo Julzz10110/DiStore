@@ -33,5 +33,5 @@ A lightweight, distributed key-value storage system written in Go that provides 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-username/distore.git
-cd distore
+git clone https://github.com/Julzz10110/DiStore.git
+cd DiStore
