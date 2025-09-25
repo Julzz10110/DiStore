@@ -3,7 +3,9 @@ package replication
 import (
 	"bytes"
 	"context"
+	"distore/cluster"
 	"distore/storage"
+	"distore/synchro"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,14 +15,16 @@ import (
 )
 
 type Replicator struct {
-	nodes            []string
-	replicaCount     int
-	httpClient       *http.Client
-	mu               sync.RWMutex
-	quorumConfig     *QuorumConfig
-	consistencyMgr   *ConsistencyManager
-	hintedHandoff    *HintedHandoff
-	conflictResolver *storage.ConflictResolver
+	nodes           []string
+	replicaCount    int
+	httpClient      *http.Client
+	mu              sync.RWMutex
+	quorumConfig    *QuorumConfig
+	consistencyMgr  *ConsistencyManager
+	hintedHandoff   *HintedHandoff
+	failoverManager *cluster.FailoverManager
+	readOnlyManager *cluster.ReadOnlyManager
+	repairManager   *synchro.RepairManager
 }
 
 type ReplicationRequest struct {
@@ -47,6 +51,9 @@ func NewReplicator(nodes []string, replicaCount int) *Replicator {
 
 	// Init extended functions only if there are multiple nodes
 	if len(nodes) > 1 {
+		// Инициализируем системы отказоустойчивости
+		replicator.failoverManager = cluster.NewFailoverManager(nodes, 30*time.Second, 5*time.Second)
+		replicator.readOnlyManager = cluster.NewReadOnlyManager((len(nodes) / 2) + 1)
 		replicator.quorumConfig = &QuorumConfig{
 			WriteQuorum: (len(nodes) / 2) + 1, // N/2 + 1
 			ReadQuorum:  (len(nodes) / 2) + 1,
@@ -69,7 +76,20 @@ func (r *Replicator) ReplicateSet(key, value string) error {
 	return r.replicateSetLegacy(key, value)
 }
 
+func (r *Replicator) SetRepairManager(repairManager *synchro.RepairManager) {
+	r.repairManager = repairManager
+}
+
 func (r *Replicator) replicateSetWithQuorum(key, value string) error {
+	if r.readOnlyManager != nil && !r.readOnlyManager.CanWrite() {
+		return fmt.Errorf("cluster is in read-only mode")
+	}
+
+	activeNodes := r.failoverManager.GetActiveNodes()
+	if len(activeNodes) < r.quorumConfig.WriteQuorum {
+		return fmt.Errorf("insufficient active nodes for write quorum")
+	}
+
 	successful := 0
 	failedNodes := make([]string, 0)
 

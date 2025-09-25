@@ -26,6 +26,15 @@ type ReplicationConfig struct {
 	ConflictResolution   string `json:"conflict_resolution"` // "lww" or "vector"
 }
 
+type FailoverConfig struct {
+	CheckInterval int `json:"check_interval_seconds"`
+	Timeout       int `json:"timeout_seconds"`
+}
+
+type RepairConfig struct {
+	SyncInterval int `json:"sync_interval_seconds"`
+}
+
 type Config struct {
 	HTTPPort       int               `json:"http_port"`
 	Nodes          []string          `json:"nodes"`
@@ -35,6 +44,8 @@ type Config struct {
 	TLS            TLSConfig         `json:"tls"`
 	PrometheusPort int               `json:"prometheus_port"`
 	Replication    ReplicationConfig `json:"replication"`
+	Failover       FailoverConfig    `json:"failover"`
+	Repair         RepairConfig      `json:"repair"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
