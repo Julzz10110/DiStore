@@ -20,7 +20,6 @@ import (
 	"distore/storage"
 
 	"github.com/gorilla/mux"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -37,17 +36,20 @@ func main() {
 	// Set up logging
 	monitoring.SetupLogger()
 
-	// Init storage
-	var store storage.Storage
+	// Init base storage
+	var baseStore storage.Storage
 	if cfg.DataDir != "" {
-		store, err = storage.NewDiskStorage(cfg.DataDir)
+		baseStore, err = storage.NewDiskStorage(cfg.DataDir)
 		if err != nil {
 			log.Fatalf("Error creating disk storage: %v", err)
 		}
 	} else {
-		store = storage.NewMemoryStorage()
+		baseStore = storage.NewMemoryStorage()
 	}
-	defer store.Close()
+	defer baseStore.Close()
+
+	// Wrapping storage with advanced capabilities
+	store := wrapStorageWithAdvancedFeatures(baseStore, cfg)
 
 	// Init replication
 	replicator := replication.NewReplicator(cfg.Nodes, cfg.ReplicaCount)
@@ -80,7 +82,6 @@ func main() {
 
 	// Health endpoints
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Simple health check
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}).Methods("GET")
@@ -96,6 +97,22 @@ func main() {
 		public.HandleFunc("/auth/token", handlers.TokenHandler).Methods("POST")
 	}
 
+	// Advanced data operations endpoints
+	advanced := router.PathPrefix("/advanced").Subrouter()
+	if cfg.Auth.Enabled {
+		advanced.Use(auth.AuthMiddleware(authService))
+		advanced.Use(auth.RBACMiddleware(auth.RoleWrite))
+	} else {
+		advanced.Use(auth.PublicMiddleware) // important for working without authentication
+	}
+
+	advanced.HandleFunc("/ttl", handlers.TTLHandler).Methods("POST")
+	advanced.HandleFunc("/increment", handlers.IncrementHandler).Methods("POST")
+	advanced.HandleFunc("/batch", handlers.BatchHandler).Methods("POST")
+	advanced.HandleFunc("/cas", handlers.CASHandler).Methods("POST")
+	advanced.HandleFunc("/lock/{key}", handlers.AcquireLockHandler).Methods("POST")
+	advanced.HandleFunc("/lock/{key}", handlers.ReleaseLockHandler).Methods("DELETE")
+
 	// Protected endpoints
 	protected := router.PathPrefix("").Subrouter()
 	if cfg.Auth.Enabled && authService != nil {
@@ -104,7 +121,6 @@ func main() {
 		protected.Use(auth.TenantMiddleware)
 		protected.Use(auth.KeyAccessMiddleware)
 	} else {
-		// use public middleware if authentication is disabled
 		protected.Use(auth.PublicMiddleware)
 	}
 
@@ -115,6 +131,7 @@ func main() {
 
 	// Internal endpoints for replication
 	internal := router.PathPrefix("/internal").Subrouter()
+	internal.Use(auth.PublicMiddleware)
 	internal.HandleFunc("/set", handlers.InternalSetHandler).Methods("POST")
 	internal.HandleFunc("/delete/{key}", handlers.InternalDeleteHandler).Methods("DELETE")
 
@@ -124,15 +141,7 @@ func main() {
 	router.Use(loggingMiddleware)
 
 	// Run background tasks for metrics
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			metrics.UpdateStorageMetrics(store)
-			metrics.UpdateReplicationMetrics(replicator)
-		}
-	}()
+	go startBackgroundTasks(store, replicator, metrics)
 
 	// Launch the server
 	server := &http.Server{
@@ -140,21 +149,16 @@ func main() {
 		Handler: router,
 	}
 
-	// Run Prometheus metrics (if enabled)
-	if cfg.PrometheusPort > 0 {
-		go startPrometheusMetrics(cfg.PrometheusPort)
-	}
-
 	go func() {
 		log.Printf("Server starting on port %d", cfg.HTTPPort)
-		if cfg.TLS.Enabled {
-			log.Printf("TLS enabled with cert: %s, key: %s", cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		}
-		if cfg.Auth.Enabled {
-			log.Printf("Authentication enabled")
-		}
-		log.Printf("Metrics available on /metrics")
-		log.Printf("Health checks available on /health and /health/details")
+		log.Printf("Advanced features enabled: TTL, Atomic ops, Batch ops, CAS")
+		log.Printf("Endpoints available:")
+		log.Printf("  POST   /advanced/ttl")
+		log.Printf("  POST   /advanced/increment")
+		log.Printf("  POST   /advanced/batch")
+		log.Printf("  POST   /advanced/cas")
+		log.Printf("  POST   /advanced/lock/{key}")
+		log.Printf("  DELETE /advanced/lock/{key}")
 
 		var err error
 		if cfg.TLS.Enabled {
@@ -168,7 +172,7 @@ func main() {
 		}
 	}()
 
-	// Wait for signals for a graceful shutdown
+	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -184,35 +188,65 @@ func main() {
 	log.Println("Server exited")
 }
 
-// createMetricsMiddleware creates middleware for collecting metrics
+// wrapStorageWithAdvancedFeatures wraps basic storage with advanced features
+func wrapStorageWithAdvancedFeatures(baseStore storage.Storage, cfg *config.Config) storage.Storage {
+	store := baseStore
+
+	// Use the settings from the configuration
+	cleanupInterval := time.Duration(cfg.Advanced.CleanupInterval) * time.Second
+	if cleanupInterval == 0 {
+		cleanupInterval = 1 * time.Minute // default value
+	}
+
+	// Add TTL support (if enabled)
+	if cfg.Advanced.TTLEnabled {
+		ttlStore := storage.NewTTLStorage(store, cleanupInterval)
+		store = ttlStore
+	}
+
+	// Add atomic operations (if enabled)
+	if cfg.Advanced.AtomicEnabled {
+		atomicStore := storage.NewAtomicStorage(store)
+		store = atomicStore
+	}
+
+	// Add batch operations (if enabled)
+	if cfg.Advanced.BatchEnabled {
+		batchStore := storage.NewBatchStorage(store)
+		store = batchStore
+	}
+
+	// Add CAS support (if enabled)
+	if cfg.Advanced.CASEnabled || cfg.Advanced.LockingEnabled {
+		casStore := storage.NewCASStorage(store)
+		store = casStore
+	}
+
+	return store
+}
+
+// startBackgroundTasks starts background tasks
+func startBackgroundTasks(store storage.Storage, replicator *replication.Replicator, metrics *monitoring.Metrics) {
+	// Metrics update every 30 seconds
+	metricsTicker := time.NewTicker(30 * time.Second)
+	defer metricsTicker.Stop()
+
+	for range metricsTicker.C {
+		metrics.UpdateStorageMetrics(store)
+		metrics.UpdateReplicationMetrics(replicator)
+	}
+}
+
 func createMetricsMiddleware(metrics *monitoring.Metrics) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-
-			// Create ResponseWriter to intercept the status
 			rw := &monitoring.ResponseWriter{ResponseWriter: w, StatusCode: 200}
-
 			next.ServeHTTP(rw, r)
-
 			duration := time.Since(start)
 			metrics.ObserveRequest(r.Method, r.URL.Path, rw.StatusCode, duration)
-
-			if rw.StatusCode >= 400 {
-				errorType := "client_error"
-				if rw.StatusCode >= 500 {
-					errorType = "server_error"
-				}
-				metrics.ObserveError(r.Method, r.URL.Path, errorType)
-			}
 		})
 	}
-}
-
-func startPrometheusMetrics(port int) {
-	http.Handle("/metrics", promhttp.Handler())
-	log.Printf("Prometheus metrics available on :%d/metrics", port)
-	http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {

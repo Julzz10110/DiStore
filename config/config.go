@@ -46,6 +46,17 @@ type Config struct {
 	Replication    ReplicationConfig `json:"replication"`
 	Failover       FailoverConfig    `json:"failover"`
 	Repair         RepairConfig      `json:"repair"`
+	Advanced       AdvancedConfig    `json:"advanced"`
+}
+
+type AdvancedConfig struct {
+	TTLEnabled      bool `json:"ttl_enabled"`
+	AtomicEnabled   bool `json:"atomic_enabled"`
+	BatchEnabled    bool `json:"batch_enabled"`
+	CASEnabled      bool `json:"cas_enabled"`
+	LockingEnabled  bool `json:"locking_enabled"`
+	DefaultTTL      int  `json:"default_ttl"`      // in seconds
+	CleanupInterval int  `json:"cleanup_interval"` // in seconds
 }
 
 func LoadConfig(filename string) (*Config, error) {

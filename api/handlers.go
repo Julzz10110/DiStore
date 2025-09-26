@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/gorilla/mux"
 )
 
 type Handlers struct {
@@ -292,5 +295,128 @@ func (h *Handlers) GetAllHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"count": len(items),
 		"items": items,
+	})
+}
+
+// CASHandler for Compare-and-Set operations
+func (h *Handlers) CASHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Key             string `json:"key"`
+		ExpectedValue   string `json:"expected_value"`
+		NewValue        string `json:"new_value"`
+		ExpectedVersion int64  `json:"expected_version"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	casStorage, ok := h.storage.(*storage.CASStorage)
+	if !ok {
+		http.Error(w, "CAS operations not supported", http.StatusNotImplemented)
+		return
+	}
+
+	tenantKey := h.getTenantKey(r, req.Key)
+	result, err := casStorage.CompareAndSet(tenantKey, req.ExpectedValue, req.NewValue, req.ExpectedVersion)
+	if err != nil {
+		http.Error(w, "Error in CAS operation: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":       result.Success,
+		"version":       result.Version,
+		"current_value": result.CurrentValue,
+	})
+}
+
+// AcquireLockHandler to acquire the lock
+func (h *Handlers) AcquireLockHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract the key from the path
+	vars := mux.Vars(r)
+	key := vars["key"]
+	if key == "" {
+		http.Error(w, "Lock key is required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Timeout int64 `json:"timeout"` // in seconds
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Timeout == 0 {
+		req.Timeout = 30 // default timeout 30 seconds
+	}
+
+	casStorage, ok := h.storage.(*storage.CASStorage)
+	if !ok {
+		http.Error(w, "Locking not supported", http.StatusNotImplemented)
+		return
+	}
+
+	tenantKey := h.getTenantKey(r, key)
+	acquired, err := casStorage.AcquireLock(tenantKey, time.Duration(req.Timeout)*time.Second)
+	if err != nil {
+		http.Error(w, "Error acquiring lock: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"acquired": acquired,
+		"key":      key,
+	})
+}
+
+// ReleaseLockHandler to release the lock
+func (h *Handlers) ReleaseLockHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract the key from the path using
+	vars := mux.Vars(r)
+	key := vars["key"]
+	if key == "" {
+		http.Error(w, "Lock key is required", http.StatusBadRequest)
+		return
+	}
+
+	casStorage, ok := h.storage.(*storage.CASStorage)
+	if !ok {
+		http.Error(w, "Locking not supported", http.StatusNotImplemented)
+		return
+	}
+
+	tenantKey := h.getTenantKey(r, key)
+	err := casStorage.ReleaseLock(tenantKey)
+	if err != nil {
+		http.Error(w, "Error releasing lock: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"released": true,
+		"key":      key,
 	})
 }
