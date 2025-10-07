@@ -3,11 +3,12 @@ package replication
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+
 	"distore/cluster"
 	"distore/storage"
 	"distore/synchro"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -374,6 +375,17 @@ func (r *Replicator) UpdateNodes(newNodes []string) {
 	// Update replicaCount if necessary
 	if r.replicaCount > len(r.nodes) {
 		r.replicaCount = len(r.nodes)
+	}
+
+	// Propagate node changes to failover/read-only managers if present
+	if r.failoverManager != nil {
+		r.failoverManager.SetNodes(r.nodes)
+	}
+	if r.readOnlyManager != nil && r.quorumConfig != nil {
+		// Update quorum parameters based on new cluster size
+		r.quorumConfig.TotalNodes = len(r.nodes)
+		r.quorumConfig.WriteQuorum = (len(r.nodes) / 2) + 1
+		r.quorumConfig.ReadQuorum = (len(r.nodes) / 2) + 1
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"distore/api"
 	"distore/auth"
+	"distore/cluster"
 	"distore/config"
 	"distore/monitoring"
 	"distore/replication"
@@ -54,6 +55,10 @@ func main() {
 	// Init replication
 	replicator := replication.NewReplicator(cfg.Nodes, cfg.ReplicaCount)
 
+	// Initialize rebalancer with self address
+	selfAddr := fmt.Sprintf("localhost:%d", cfg.HTTPPort)
+	rebalancer := cluster.NewRebalancer(store, replicator, selfAddr)
+
 	// Init authentication
 	var authService auth.AuthServiceInterface
 	if cfg.Auth.Enabled {
@@ -74,6 +79,9 @@ func main() {
 
 	// Init handlers
 	handlers := api.NewHandlers(store, replicator, authService)
+	// inject rebalancer (optional)
+	// NOTE: rebalancer field is optional, set directly
+	handlers.Rebalancer = rebalancer
 
 	router := mux.NewRouter()
 
@@ -136,6 +144,24 @@ func main() {
 	internal.Use(auth.PublicMiddleware)
 	internal.HandleFunc("/set", handlers.InternalSetHandler).Methods("POST")
 	internal.HandleFunc("/delete/{key}", handlers.InternalDeleteHandler).Methods("DELETE")
+	internal.HandleFunc("/get/{key}", handlers.InternalGetHandler).Methods("GET")
+
+	// Admin endpoints
+	admin := router.PathPrefix("/admin").Subrouter()
+	if cfg.Auth.Enabled && authService != nil {
+		admin.Use(auth.AuthMiddleware(authService))
+		admin.Use(auth.RBACMiddleware(auth.RoleAdmin))
+	} else {
+		admin.Use(auth.PublicMiddleware)
+	}
+	admin.HandleFunc("/nodes", handlers.ListNodesHandler).Methods("GET")
+	admin.HandleFunc("/nodes", handlers.AddNodeHandler).Methods("POST")
+	admin.HandleFunc("/nodes/{node}", handlers.RemoveNodeHandler).Methods("DELETE")
+	admin.HandleFunc("/rebalance", handlers.TriggerRebalanceHandler).Methods("POST")
+	admin.HandleFunc("/config", handlers.GetConfigHandler).Methods("GET")
+	admin.HandleFunc("/config", handlers.UpdateConfigHandler).Methods("PATCH")
+	admin.HandleFunc("/backup", handlers.BackupHandler).Methods("POST")
+	admin.HandleFunc("/restore", handlers.RestoreHandler).Methods("POST")
 
 	// Middleware chain
 	router.Use(monitoring.LoggerMiddleware)

@@ -2,11 +2,13 @@ package api
 
 import (
 	"distore/auth"
+	"distore/cluster"
 	"distore/replication"
 	"distore/storage"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +19,7 @@ type Handlers struct {
 	storage     storage.Storage
 	replicator  replication.ReplicatorInterface
 	authService auth.AuthServiceInterface
+	Rebalancer  *cluster.Rebalancer
 }
 
 func NewHandlers(storage storage.Storage, replicator replication.ReplicatorInterface, authService auth.AuthServiceInterface) *Handlers {
@@ -233,6 +236,34 @@ func (h *Handlers) InternalSetHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+// Internal handler to read value (used for quorum/repair/rebalance)
+func (h *Handlers) InternalGetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pathParts := strings.Split(r.URL.Path, "/")
+	if len(pathParts) < 4 {
+		http.Error(w, "Key is required", http.StatusBadRequest)
+		return
+	}
+	key := pathParts[3]
+
+	value, err := h.storage.Get(key)
+	if err != nil {
+		if err == storage.ErrKeyNotFound {
+			http.Error(w, "Key not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"value": value})
+}
+
 // Internal handler for delete replication
 func (h *Handlers) InternalDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
@@ -275,6 +306,161 @@ func (h *Handlers) HealthHandler(w http.ResponseWriter, r *http.Request) {
 		"status":  "healthy",
 		"storage": "available",
 	})
+}
+
+// Admin: list nodes
+func (h *Handlers) ListNodesHandler(w http.ResponseWriter, r *http.Request) {
+	nodes := h.replicator.GetNodes()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"nodes": nodes})
+}
+
+// Admin: add node
+func (h *Handlers) AddNodeHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Node string `json:"node"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Node == "" {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	nodes := h.replicator.GetNodes()
+	// append if missing
+	found := false
+	for _, n := range nodes {
+		if n == req.Node {
+			found = true
+			break
+		}
+	}
+	if !found {
+		nodes = append(nodes, req.Node)
+	}
+	h.replicator.UpdateNodes(nodes)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"nodes": nodes})
+}
+
+// Admin: remove node
+func (h *Handlers) RemoveNodeHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	node := vars["node"]
+	if node == "" {
+		http.Error(w, "node is required", http.StatusBadRequest)
+		return
+	}
+
+	nodes := h.replicator.GetNodes()
+	filtered := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if n != node {
+			filtered = append(filtered, n)
+		}
+	}
+	h.replicator.UpdateNodes(filtered)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"nodes": filtered})
+}
+
+// Admin: trigger rebalance
+func (h *Handlers) TriggerRebalanceHandler(w http.ResponseWriter, r *http.Request) {
+	if h.Rebalancer == nil {
+		http.Error(w, "rebalancer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	moved, err := h.Rebalancer.TriggerRebalance()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"moved": moved})
+}
+
+// Admin: config get
+func (h *Handlers) GetConfigHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"nodes":         h.replicator.GetNodes(),
+		"replica_count": h.replicator.GetReplicaCount(),
+	})
+}
+
+// Admin: config update
+func (h *Handlers) UpdateConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Nodes        []string `json:"nodes"`
+		ReplicaCount *int     `json:"replica_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if len(req.Nodes) > 0 {
+		h.replicator.UpdateNodes(req.Nodes)
+	}
+	if req.ReplicaCount != nil {
+		h.replicator.SetReplicaCount(*req.ReplicaCount)
+	}
+	h.GetConfigHandler(w, r)
+}
+
+// Admin: backup current data to a JSON file path provided
+func (h *Handlers) BackupHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	items, err := h.storage.GetAll()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	f, err := os.Create(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	if err := json.NewEncoder(f).Encode(items); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "count": len(items)})
+}
+
+// Admin: restore from a JSON file
+func (h *Handlers) RestoreHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+	f, err := os.Open(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	var items []storage.KeyValue
+	if err := json.NewDecoder(f).Decode(&items); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	for _, it := range items {
+		_ = h.storage.Set(it.Key, it.Value)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "count": len(items)})
 }
 
 // New handler for getting all keys

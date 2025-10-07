@@ -8,7 +8,7 @@ import (
 )
 
 func TestFailoverManager(t *testing.T) {
-	// Создаем тестовые серверы
+	// Create test servers
 	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -23,7 +23,7 @@ func TestFailoverManager(t *testing.T) {
 
 	t.Run("NodeStatusMonitoring", func(t *testing.T) {
 		fm := NewFailoverManager(nodes, 100*time.Millisecond, 1*time.Second)
-		time.Sleep(200 * time.Millisecond) // Ждем проверок
+		time.Sleep(200 * time.Millisecond) // wait checks
 
 		status := fm.GetNodeStatus()
 		if len(status) != 2 {
@@ -55,9 +55,9 @@ func TestFailoverManager(t *testing.T) {
 }
 
 func TestFailoverManager_TimeoutHandling(t *testing.T) {
-	// Сервер с задержкой больше таймаута
+	// Server with latency more than timeout
 	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second) // Больше чем таймаут
+		time.Sleep(2 * time.Second) // more than a timeout
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer slowServer.Close()
@@ -68,5 +68,35 @@ func TestFailoverManager_TimeoutHandling(t *testing.T) {
 	status := fm.GetNodeStatus()
 	if status[slowServer.URL[7:]].Online {
 		t.Error("Slow node should be marked as offline")
+	}
+}
+
+func TestFailoverManager_DynamicMembership(t *testing.T) {
+	serverOK := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer serverOK.Close()
+
+	fm := NewFailoverManager([]string{}, 50*time.Millisecond, 500*time.Millisecond)
+
+	// Add node
+	fm.AddNode(serverOK.URL[7:])
+	time.Sleep(100 * time.Millisecond)
+	if len(fm.GetActiveNodes()) != 1 {
+		t.Fatalf("expected 1 active node after add")
+	}
+
+	// Remove node
+	fm.RemoveNode(serverOK.URL[7:])
+	time.Sleep(100 * time.Millisecond)
+	if len(fm.GetActiveNodes()) != 0 {
+		t.Fatalf("expected 0 active nodes after remove")
+	}
+
+	// Set nodes
+	fm.SetNodes([]string{serverOK.URL[7:]})
+	time.Sleep(100 * time.Millisecond)
+	if len(fm.GetActiveNodes()) != 1 {
+		t.Fatalf("expected 1 active node after set")
 	}
 }
