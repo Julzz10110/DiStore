@@ -110,6 +110,8 @@ func main() {
 	advanced.HandleFunc("/increment", handlers.IncrementHandler).Methods("POST")
 	advanced.HandleFunc("/batch", handlers.BatchHandler).Methods("POST")
 	advanced.HandleFunc("/cas", handlers.CASHandler).Methods("POST")
+	advanced.HandleFunc("/performance/stats", handlers.PerformanceStatsHandler).Methods("GET")
+	advanced.HandleFunc("/cache/preload", handlers.CachePreloadHandler).Methods("POST")
 	advanced.HandleFunc("/lock/{key}", handlers.AcquireLockHandler).Methods("POST")
 	advanced.HandleFunc("/lock/{key}", handlers.ReleaseLockHandler).Methods("DELETE")
 
@@ -192,34 +194,93 @@ func main() {
 func wrapStorageWithAdvancedFeatures(baseStore storage.Storage, cfg *config.Config) storage.Storage {
 	store := baseStore
 
-	// Use the settings from the configuration
-	cleanupInterval := time.Duration(cfg.Advanced.CleanupInterval) * time.Second
-	if cleanupInterval == 0 {
-		cleanupInterval = 1 * time.Minute // default value
-	}
-
-	// Add TTL support (if enabled)
+	// 1. Add TTL support (if enabled)
 	if cfg.Advanced.TTLEnabled {
+		cleanupInterval := time.Duration(cfg.Advanced.CleanupInterval) * time.Second
+		if cleanupInterval == 0 {
+			cleanupInterval = 1 * time.Minute
+		}
 		ttlStore := storage.NewTTLStorage(store, cleanupInterval)
 		store = ttlStore
+		log.Printf("TTL support enabled (cleanup interval: %v)", cleanupInterval)
 	}
 
-	// Add atomic operations (if enabled)
+	// 2. Add performance optimizations
+	if cfg.Performance.Enabled {
+		// hot data caching
+		if cfg.Performance.CacheSize > 0 {
+			cacheTTL := time.Duration(cfg.Performance.CacheTTL) * time.Second
+			if cacheTTL == 0 {
+				cacheTTL = 5 * time.Minute
+			}
+			cacheStore := storage.NewCacheStorage(
+				store,
+				storage.LRU,
+				cfg.Performance.CacheSize,
+				cacheTTL,
+			)
+			store = cacheStore
+			log.Printf("Cache enabled (size: %d, TTL: %v)",
+				cfg.Performance.CacheSize, cacheTTL)
+		}
+
+		// data compression
+		if cfg.Performance.CompressionEnabled {
+			threshold := cfg.Performance.CompressionThreshold
+			if threshold == 0 {
+				threshold = 1024 // 1KB by default
+			}
+			compressedStore := storage.NewCompressedStorage(
+				store,
+				storage.CompressionGZIP,
+				threshold,
+			)
+			store = compressedStore
+			log.Printf("Compression enabled (threshold: %d bytes)", threshold)
+		}
+
+		// Bloom filter for quick negative checks
+		if cfg.Performance.BloomFilterEnabled {
+			expectedElements := cfg.Performance.ExpectedElements
+			if expectedElements == 0 {
+				expectedElements = 10000
+			}
+			optimizedStore := storage.NewOptimizedStorage(store, expectedElements)
+			store = optimizedStore
+			log.Printf("Bloom filter enabled (expected elements: %d)", expectedElements)
+		}
+
+		// Write-ahead log for durability
+		if cfg.Performance.WALEnabled && cfg.DataDir != "" {
+			walStore, err := storage.NewWALStorage(store, cfg.DataDir)
+			if err == nil {
+				store = walStore
+				log.Printf("Write-ahead log enabled")
+			} else {
+				log.Printf("WAL initialization failed: %v", err)
+			}
+		}
+	}
+
+	// 3. Add atomic operations (if enabled)
 	if cfg.Advanced.AtomicEnabled {
 		atomicStore := storage.NewAtomicStorage(store)
 		store = atomicStore
+		log.Printf("Atomic operations enabled")
 	}
 
-	// Add batch operations (if enabled)
+	// 4. Add batch operations (if enabled)
 	if cfg.Advanced.BatchEnabled {
 		batchStore := storage.NewBatchStorage(store)
 		store = batchStore
+		log.Printf("Batch operations enabled")
 	}
 
-	// Add CAS support (if enabled)
+	// 5. Add CAS support (if enabled)
 	if cfg.Advanced.CASEnabled || cfg.Advanced.LockingEnabled {
 		casStore := storage.NewCASStorage(store)
 		store = casStore
+		log.Printf("CAS and locking support enabled")
 	}
 
 	return store

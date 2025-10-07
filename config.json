@@ -1,14 +1,12 @@
 {
   "http_port": 8080,
   "nodes": [
-    "localhost:8080",
-    "localhost:8081",
-    "localhost:8082"
+    "localhost:8081"
   ],
-  "replica_count": 2,
+  "replica_count": 1,
   "data_dir": "./data",
   "auth": {
-    "enabled": true,
+    "enabled": false,
     "private_key": "<YOUR_PRIVATE_KEY>",
     "public_key": "<YOUR_PUBLIC_KEY>",
     "token_duration": 3600,
@@ -19,5 +17,31 @@
     "cert_file": "cert.pem",
     "key_file": "key.pem"
   },
-  "prometheus_port": 9090
+  "prometheus_port": 9090,
+  "failover": {
+    "check_interval_seconds": 30,
+    "timeout_seconds": 5
+  },
+  "repair": {
+    "sync_interval_seconds": 60
+  },
+  "advanced": {
+    "ttl_enabled": true,
+    "atomic_enabled": true,
+    "batch_enabled": true,
+    "cas_enabled": true,
+    "locking_enabled": true,
+    "default_ttl": 300,
+    "cleanup_interval": 60
+  },
+  "performance": {
+    "enabled": true,
+    "cache_size": 1000,
+    "cache_ttl": 300,
+    "compression_enabled": true,
+    "compression_threshold": 512,
+    "bloom_filter_enabled": true,
+    "expected_elements": 10000,
+    "wal_enabled": true
+  }
 }

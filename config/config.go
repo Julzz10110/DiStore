@@ -35,6 +35,27 @@ type RepairConfig struct {
 	SyncInterval int `json:"sync_interval_seconds"`
 }
 
+type AdvancedConfig struct {
+	TTLEnabled      bool `json:"ttl_enabled"`
+	AtomicEnabled   bool `json:"atomic_enabled"`
+	BatchEnabled    bool `json:"batch_enabled"`
+	CASEnabled      bool `json:"cas_enabled"`
+	LockingEnabled  bool `json:"locking_enabled"`
+	DefaultTTL      int  `json:"default_ttl"`      // in seconds
+	CleanupInterval int  `json:"cleanup_interval"` // in seconds
+}
+
+type PerformanceConfig struct {
+	Enabled              bool `json:"enabled"`
+	CacheSize            int  `json:"cache_size"`
+	CacheTTL             int  `json:"cache_ttl"` // in seconds
+	CompressionEnabled   bool `json:"compression_enabled"`
+	CompressionThreshold int  `json:"compression_threshold"` // min size for compression
+	BloomFilterEnabled   bool `json:"bloom_filter_enabled"`
+	ExpectedElements     int  `json:"expected_elements"` // for Bloom filter
+	WALEnabled           bool `json:"wal_enabled"`
+}
+
 type Config struct {
 	HTTPPort       int               `json:"http_port"`
 	Nodes          []string          `json:"nodes"`
@@ -47,16 +68,7 @@ type Config struct {
 	Failover       FailoverConfig    `json:"failover"`
 	Repair         RepairConfig      `json:"repair"`
 	Advanced       AdvancedConfig    `json:"advanced"`
-}
-
-type AdvancedConfig struct {
-	TTLEnabled      bool `json:"ttl_enabled"`
-	AtomicEnabled   bool `json:"atomic_enabled"`
-	BatchEnabled    bool `json:"batch_enabled"`
-	CASEnabled      bool `json:"cas_enabled"`
-	LockingEnabled  bool `json:"locking_enabled"`
-	DefaultTTL      int  `json:"default_ttl"`      // in seconds
-	CleanupInterval int  `json:"cleanup_interval"` // in seconds
+	Performance    PerformanceConfig `json:"performance"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
