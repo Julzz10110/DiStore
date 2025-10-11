@@ -1,0 +1,265 @@
+# Kubernetes Integration Testing Makefile for Distore
+
+.PHONY: help k8s-test k8s-test-short k8s-validate k8s-deploy k8s-clean k8s-setup k8s-logs
+
+# Default target
+help:
+	@echo "Kubernetes Integration Testing Commands:"
+	@echo "  k8s-test        - Run full Kubernetes integration tests"
+	@echo "  k8s-test-short  - Run short Kubernetes tests (skip integration)"
+	@echo "  k8s-validate    - Validate Kubernetes manifests"
+	@echo "  k8s-deploy      - Deploy Distore to Kubernetes"
+	@echo "  k8s-clean       - Clean up Kubernetes resources"
+	@echo "  k8s-setup       - Setup Kubernetes environment"
+	@echo "  k8s-logs        - Show logs from Distore deployment"
+
+# Variables
+NAMESPACE ?= distore-test
+IMAGE_TAG ?= latest
+CLUSTER_NAME ?= distore-cluster
+
+# Run full Kubernetes integration tests
+k8s-test:
+	@echo "🚀 Running full Kubernetes integration tests..."
+	@if command -v powershell >/dev/null 2>&1; then \
+		powershell -ExecutionPolicy Bypass -File scripts/test-k8s-integration.ps1 -Namespace $(NAMESPACE); \
+	else \
+		chmod +x scripts/test-k8s-integration.sh && \
+		./scripts/test-k8s-integration.sh; \
+	fi
+
+# Run short Kubernetes tests (skip integration tests)
+k8s-test-short:
+	@echo "🧪 Running short Kubernetes tests..."
+	go test ./k8s -v -short
+
+# Validate Kubernetes manifests
+k8s-validate:
+	@echo "✅ Validating Kubernetes manifests..."
+	kubectl apply --dry-run=client -f k8s/operator.yaml
+	@for file in deployments/*.yaml; do \
+		echo "Validating $$file..."; \
+		kubectl apply --dry-run=client -f "$$file"; \
+	done
+	@echo "✅ All manifests are valid"
+
+# Deploy Distore to Kubernetes
+k8s-deploy:
+	@echo "🚀 Deploying Distore to Kubernetes..."
+	kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -f k8s/operator.yaml
+	@echo "Waiting for CRD to be ready..."
+	kubectl wait --for condition=established --timeout=60s crd/distoreclusters.distore.io
+	@echo "✅ Distore deployed successfully"
+
+# Clean up Kubernetes resources
+k8s-clean:
+	@echo "🧹 Cleaning up Kubernetes resources..."
+	kubectl delete namespace $(NAMESPACE) --ignore-not-found=true
+	kubectl delete crd distoreclusters.distore.io --ignore-not-found=true
+	@echo "✅ Cleanup completed"
+
+# Setup Kubernetes environment
+k8s-setup:
+	@echo "🔧 Setting up Kubernetes environment..."
+	@echo "Checking prerequisites..."
+	@command -v kubectl >/dev/null 2>&1 || { echo "❌ kubectl is required but not installed. Aborting."; exit 1; }
+	@kubectl cluster-info >/dev/null 2>&1 || { echo "❌ Cannot connect to Kubernetes cluster. Aborting."; exit 1; }
+	@echo "✅ Kubernetes environment is ready"
+
+# Show logs from Distore deployment
+k8s-logs:
+	@echo "📋 Showing logs from Distore deployment..."
+	kubectl logs -n $(NAMESPACE) -l app=distore --tail=100 -f
+
+# Create a test DistoreCluster
+k8s-create-test-cluster:
+	@echo "🏗️ Creating test DistoreCluster..."
+	kubectl apply -f - <<EOF
+apiVersion: distore.io/v1
+kind: DistoreCluster
+metadata:
+  name: $(CLUSTER_NAME)
+  namespace: $(NAMESPACE)
+spec:
+  replicas: 3
+  image: distore/distore:$(IMAGE_TAG)
+  multiCloud:
+    enabled: true
+    dataCenters:
+      - id: "dc1"
+        region: "us-east-1"
+        nodes: ["node1:8080", "node2:8080", "node3:8080"]
+        priority: 1
+        replicaCount: 3
+    edgeNodes:
+      - id: "edge1"
+        location: "New York"
+        node: "edge1:8080"
+        cacheOnly: true
+        latencyMs: 20
+    latencyThresholds:
+      local: 10
+      crossDC: 100
+      edge: 50
+EOF
+	@echo "✅ Test cluster created"
+
+# Delete test DistoreCluster
+k8s-delete-test-cluster:
+	@echo "🗑️ Deleting test DistoreCluster..."
+	kubectl delete distorecluster $(CLUSTER_NAME) -n $(NAMESPACE) --ignore-not-found=true
+	@echo "✅ Test cluster deleted"
+
+# Scale test cluster
+k8s-scale-test-cluster:
+	@echo "📈 Scaling test cluster to $(REPLICAS) replicas..."
+	kubectl patch distorecluster $(CLUSTER_NAME) -n $(NAMESPACE) --type='merge' -p='{"spec":{"replicas":$(REPLICAS)}}'
+	@echo "✅ Cluster scaled to $(REPLICAS) replicas"
+
+# Show cluster status
+k8s-status:
+	@echo "📊 DistoreCluster status:"
+	kubectl get distorecluster -n $(NAMESPACE) -o wide
+	@echo ""
+	@echo "📊 Related resources:"
+	kubectl get all -n $(NAMESPACE)
+	@echo ""
+	@echo "📊 Events:"
+	kubectl get events -n $(NAMESPACE) --sort-by='.lastTimestamp'
+
+# Test multi-cloud configuration
+k8s-test-multicloud:
+	@echo "🌐 Testing multi-cloud configuration..."
+	kubectl apply -f - <<EOF
+apiVersion: distore.io/v1
+kind: DistoreCluster
+metadata:
+  name: multicloud-test
+  namespace: $(NAMESPACE)
+spec:
+  replicas: 2
+  image: distore/distore:$(IMAGE_TAG)
+  multiCloud:
+    enabled: true
+    dataCenters:
+      - id: "aws-dc"
+        region: "us-east-1"
+        nodes: ["aws-node1:8080", "aws-node2:8080"]
+        priority: 1
+        replicaCount: 2
+      - id: "gcp-dc"
+        region: "us-central1"
+        nodes: ["gcp-node1:8080", "gcp-node2:8080"]
+        priority: 2
+        replicaCount: 2
+    edgeNodes:
+      - id: "edge-nyc"
+        location: "New York"
+        node: "edge-nyc:8080"
+        cacheOnly: true
+        latencyMs: 15
+      - id: "edge-london"
+        location: "London"
+        node: "edge-london:8080"
+        cacheOnly: false
+        latencyMs: 25
+    latencyThresholds:
+      local: 10
+      crossDC: 100
+      edge: 50
+    cloudProviders:
+      - name: "aws"
+        region: "us-east-1"
+        nodes: ["aws-node1:8080", "aws-node2:8080"]
+      - name: "gcp"
+        region: "us-central1"
+        nodes: ["gcp-node1:8080", "gcp-node2:8080"]
+EOF
+	@echo "✅ Multi-cloud test cluster created"
+
+# Test edge computing
+k8s-test-edge:
+	@echo "🌍 Testing edge computing configuration..."
+	kubectl apply -f - <<EOF
+apiVersion: distore.io/v1
+kind: DistoreCluster
+metadata:
+  name: edge-test
+  namespace: $(NAMESPACE)
+spec:
+  replicas: 1
+  image: distore/distore:$(IMAGE_TAG)
+  multiCloud:
+    enabled: true
+    dataCenters:
+      - id: "main-dc"
+        region: "us-central1"
+        nodes: ["main-node:8080"]
+        priority: 1
+        replicaCount: 1
+    edgeNodes:
+      - id: "edge-nyc"
+        location: "New York"
+        node: "edge-nyc:8080"
+        cacheOnly: true
+        latencyMs: 15
+      - id: "edge-london"
+        location: "London"
+        node: "edge-london:8080"
+        cacheOnly: false
+        latencyMs: 25
+      - id: "edge-tokyo"
+        location: "Tokyo"
+        node: "edge-tokyo:8080"
+        cacheOnly: true
+        latencyMs: 30
+    latencyThresholds:
+      local: 10
+      crossDC: 100
+      edge: 50
+EOF
+	@echo "✅ Edge computing test cluster created"
+
+# Run all Kubernetes tests
+k8s-test-all: k8s-setup k8s-deploy k8s-test k8s-test-multicloud k8s-test-edge k8s-status
+	@echo "🎉 All Kubernetes tests completed!"
+
+# Development helpers
+k8s-dev-setup: k8s-setup k8s-deploy k8s-create-test-cluster
+	@echo "🔧 Development environment ready!"
+	@echo "Use 'make k8s-status' to check status"
+	@echo "Use 'make k8s-logs' to view logs"
+	@echo "Use 'make k8s-clean' to cleanup"
+
+# CI/CD helpers
+k8s-ci-test: k8s-setup k8s-validate k8s-test-short
+	@echo "✅ CI tests passed!"
+
+k8s-cd-deploy: k8s-setup k8s-deploy
+	@echo "🚀 CD deployment completed!"
+
+# Monitoring
+k8s-monitor:
+	@echo "📊 Monitoring Distore deployment..."
+	watch -n 2 'kubectl get all -n $(NAMESPACE); echo ""; kubectl get distorecluster -n $(NAMESPACE) -o wide'
+
+# Debug helpers
+k8s-debug:
+	@echo "🐛 Debug information:"
+	@echo "Namespace: $(NAMESPACE)"
+	@echo "Cluster: $(CLUSTER_NAME)"
+	@echo "Image tag: $(IMAGE_TAG)"
+	@echo ""
+	@echo "Kubernetes version:"
+	kubectl version --short
+	@echo ""
+	@echo "Cluster info:"
+	kubectl cluster-info
+	@echo ""
+	@echo "Nodes:"
+	kubectl get nodes
+	@echo ""
+	@echo "CRDs:"
+	kubectl get crd | grep distore
+
