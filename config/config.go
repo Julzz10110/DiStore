@@ -24,6 +24,9 @@ type ReplicationConfig struct {
 	ReadQuorum           int    `json:"read_quorum"`
 	HintedHandoffEnabled bool   `json:"hinted_handoff_enabled"`
 	ConflictResolution   string `json:"conflict_resolution"` // "lww" or "vector"
+	CrossDCEnabled       bool   `json:"cross_dc_enabled"`
+	MaxLatencyMs         int    `json:"max_latency_ms"`
+	AsyncReplication     bool   `json:"async_replication"`
 }
 
 type FailoverConfig struct {
@@ -69,6 +72,45 @@ type Config struct {
 	Repair         RepairConfig      `json:"repair"`
 	Advanced       AdvancedConfig    `json:"advanced"`
 	Performance    PerformanceConfig `json:"performance"`
+	MultiCloud     MultiCloudConfig  `json:"multi_cloud"`
+}
+
+type MultiCloudConfig struct {
+	Enabled           bool               `json:"enabled"`
+	DataCenters       []DataCenterConfig `json:"data_centers"`
+	EdgeNodes         []EdgeNodeConfig   `json:"edge_nodes"`
+	LatencyThresholds LatencyConfig      `json:"latency_thresholds"`
+	CloudProviders    []CloudProvider    `json:"cloud_providers"`
+}
+
+type DataCenterConfig struct {
+	ID           string   `json:"id"`
+	Region       string   `json:"region"`
+	Nodes        []string `json:"nodes"`
+	Priority     int      `json:"priority"`
+	ReplicaCount int      `json:"replica_count"`
+	LatencyMs    int      `json:"latency_ms"`
+}
+
+type EdgeNodeConfig struct {
+	ID        string `json:"id"`
+	Location  string `json:"location"`
+	Node      string `json:"node"`
+	CacheOnly bool   `json:"cache_only"`
+	LatencyMs int    `json:"latency_ms"`
+}
+
+type LatencyConfig struct {
+	LocalThresholdMs   int `json:"local_threshold_ms"`
+	CrossDCThresholdMs int `json:"cross_dc_threshold_ms"`
+	EdgeThresholdMs    int `json:"edge_threshold_ms"`
+}
+
+type CloudProvider struct {
+	Name   string                 `json:"name"`
+	Region string                 `json:"region"`
+	Nodes  []string               `json:"nodes"`
+	Config map[string]interface{} `json:"config"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
