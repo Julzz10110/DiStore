@@ -1,0 +1,692 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: distore-system
+---
+# AWS Data Center
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distore-aws-cluster
+  namespace: distore-system
+spec:
+  serviceName: distore-aws-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distore
+      component: aws-cluster
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: aws-cluster
+        cloud-provider: aws
+    spec:
+      containers:
+      - name: distore
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: CLOUD_PROVIDER
+          value: "aws"
+        - name: REGION
+          value: "us-east-1"
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: distore-aws-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: distore-aws-data-$(POD_NAME)
+  volumeClaimTemplates:
+  - metadata:
+      name: distore-aws-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: gp2
+      resources:
+        requests:
+          storage: 10Gi
+---
+# GCP Data Center
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distore-gcp-cluster
+  namespace: distore-system
+spec:
+  serviceName: distore-gcp-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distore
+      component: gcp-cluster
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: gcp-cluster
+        cloud-provider: gcp
+    spec:
+      containers:
+      - name: distore
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: CLOUD_PROVIDER
+          value: "gcp"
+        - name: REGION
+          value: "us-central1"
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: distore-gcp-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: distore-gcp-data-$(POD_NAME)
+  volumeClaimTemplates:
+  - metadata:
+      name: distore-gcp-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 10Gi
+---
+# Azure Data Center
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distore-azure-cluster
+  namespace: distore-system
+spec:
+  serviceName: distore-azure-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distore
+      component: azure-cluster
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: azure-cluster
+        cloud-provider: azure
+    spec:
+      containers:
+      - name: distore
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: CLOUD_PROVIDER
+          value: "azure"
+        - name: REGION
+          value: "eastus"
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: distore-azure-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: distore-azure-data-$(POD_NAME)
+  volumeClaimTemplates:
+  - metadata:
+      name: distore-azure-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: managed-premium
+      resources:
+        requests:
+          storage: 10Gi
+---
+# AWS ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distore-aws-config
+  namespace: distore-system
+data:
+  config.json: |
+    {
+      "http_port": 8080,
+      "prometheus_port": 9090,
+      "data_dir": "/data",
+      "replica_count": 3,
+      "nodes": [
+        "distore-aws-cluster-0.distore-aws-cluster:8080",
+        "distore-aws-cluster-1.distore-aws-cluster:8080",
+        "distore-aws-cluster-2.distore-aws-cluster:8080"
+      ],
+      "auth": {
+        "enabled": false
+      },
+      "tls": {
+        "enabled": false
+      },
+      "multi_cloud": {
+        "enabled": true,
+        "data_centers": [
+          {
+            "id": "aws-us-east-1",
+            "region": "us-east-1",
+            "nodes": [
+              "distore-aws-cluster-0.distore-aws-cluster:8080",
+              "distore-aws-cluster-1.distore-aws-cluster:8080",
+              "distore-aws-cluster-2.distore-aws-cluster:8080"
+            ],
+            "priority": 1,
+            "replica_count": 3,
+            "latency_ms": 10
+          },
+          {
+            "id": "gcp-us-central1",
+            "region": "us-central1",
+            "nodes": [
+              "distore-gcp-cluster-0.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-1.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-2.distore-gcp-cluster:8080"
+            ],
+            "priority": 2,
+            "replica_count": 3,
+            "latency_ms": 50
+          },
+          {
+            "id": "azure-eastus",
+            "region": "eastus",
+            "nodes": [
+              "distore-azure-cluster-0.distore-azure-cluster:8080",
+              "distore-azure-cluster-1.distore-azure-cluster:8080",
+              "distore-azure-cluster-2.distore-azure-cluster:8080"
+            ],
+            "priority": 3,
+            "replica_count": 3,
+            "latency_ms": 60
+          }
+        ],
+        "edge_nodes": [
+          {
+            "id": "edge-nyc",
+            "location": "nyc",
+            "node": "edge-nyc.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 5
+          },
+          {
+            "id": "edge-london",
+            "location": "london",
+            "node": "edge-london.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 8
+          }
+        ],
+        "latency_thresholds": {
+          "local_threshold_ms": 10,
+          "cross_dc_threshold_ms": 100,
+          "edge_threshold_ms": 50
+        },
+        "cloud_providers": [
+          {
+            "name": "aws",
+            "region": "us-east-1",
+            "nodes": [
+              "distore-aws-cluster-0.distore-aws-cluster:8080",
+              "distore-aws-cluster-1.distore-aws-cluster:8080",
+              "distore-aws-cluster-2.distore-aws-cluster:8080"
+            ],
+            "config": {
+              "instance_type": "t3.medium",
+              "availability_zone": "us-east-1a"
+            }
+          }
+        ]
+      }
+    }
+---
+# GCP ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distore-gcp-config
+  namespace: distore-system
+data:
+  config.json: |
+    {
+      "http_port": 8080,
+      "prometheus_port": 9090,
+      "data_dir": "/data",
+      "replica_count": 3,
+      "nodes": [
+        "distore-gcp-cluster-0.distore-gcp-cluster:8080",
+        "distore-gcp-cluster-1.distore-gcp-cluster:8080",
+        "distore-gcp-cluster-2.distore-gcp-cluster:8080"
+      ],
+      "auth": {
+        "enabled": false
+      },
+      "tls": {
+        "enabled": false
+      },
+      "multi_cloud": {
+        "enabled": true,
+        "data_centers": [
+          {
+            "id": "gcp-us-central1",
+            "region": "us-central1",
+            "nodes": [
+              "distore-gcp-cluster-0.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-1.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-2.distore-gcp-cluster:8080"
+            ],
+            "priority": 1,
+            "replica_count": 3,
+            "latency_ms": 15
+          },
+          {
+            "id": "aws-us-east-1",
+            "region": "us-east-1",
+            "nodes": [
+              "distore-aws-cluster-0.distore-aws-cluster:8080",
+              "distore-aws-cluster-1.distore-aws-cluster:8080",
+              "distore-aws-cluster-2.distore-aws-cluster:8080"
+            ],
+            "priority": 2,
+            "replica_count": 3,
+            "latency_ms": 50
+          },
+          {
+            "id": "azure-eastus",
+            "region": "eastus",
+            "nodes": [
+              "distore-azure-cluster-0.distore-azure-cluster:8080",
+              "distore-azure-cluster-1.distore-azure-cluster:8080",
+              "distore-azure-cluster-2.distore-azure-cluster:8080"
+            ],
+            "priority": 3,
+            "replica_count": 3,
+            "latency_ms": 60
+          }
+        ],
+        "edge_nodes": [
+          {
+            "id": "edge-nyc",
+            "location": "nyc",
+            "node": "edge-nyc.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 5
+          },
+          {
+            "id": "edge-london",
+            "location": "london",
+            "node": "edge-london.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 8
+          }
+        ],
+        "latency_thresholds": {
+          "local_threshold_ms": 15,
+          "cross_dc_threshold_ms": 100,
+          "edge_threshold_ms": 50
+        },
+        "cloud_providers": [
+          {
+            "name": "gcp",
+            "region": "us-central1",
+            "nodes": [
+              "distore-gcp-cluster-0.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-1.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-2.distore-gcp-cluster:8080"
+            ],
+            "config": {
+              "machine_type": "e2-standard-2",
+              "zone": "us-central1-a"
+            }
+          }
+        ]
+      }
+    }
+---
+# Azure ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distore-azure-config
+  namespace: distore-system
+data:
+  config.json: |
+    {
+      "http_port": 8080,
+      "prometheus_port": 9090,
+      "data_dir": "/data",
+      "replica_count": 3,
+      "nodes": [
+        "distore-azure-cluster-0.distore-azure-cluster:8080",
+        "distore-azure-cluster-1.distore-azure-cluster:8080",
+        "distore-azure-cluster-2.distore-azure-cluster:8080"
+      ],
+      "auth": {
+        "enabled": false
+      },
+      "tls": {
+        "enabled": false
+      },
+      "multi_cloud": {
+        "enabled": true,
+        "data_centers": [
+          {
+            "id": "azure-eastus",
+            "region": "eastus",
+            "nodes": [
+              "distore-azure-cluster-0.distore-azure-cluster:8080",
+              "distore-azure-cluster-1.distore-azure-cluster:8080",
+              "distore-azure-cluster-2.distore-azure-cluster:8080"
+            ],
+            "priority": 1,
+            "replica_count": 3,
+            "latency_ms": 20
+          },
+          {
+            "id": "aws-us-east-1",
+            "region": "us-east-1",
+            "nodes": [
+              "distore-aws-cluster-0.distore-aws-cluster:8080",
+              "distore-aws-cluster-1.distore-aws-cluster:8080",
+              "distore-aws-cluster-2.distore-aws-cluster:8080"
+            ],
+            "priority": 2,
+            "replica_count": 3,
+            "latency_ms": 60
+          },
+          {
+            "id": "gcp-us-central1",
+            "region": "us-central1",
+            "nodes": [
+              "distore-gcp-cluster-0.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-1.distore-gcp-cluster:8080",
+              "distore-gcp-cluster-2.distore-gcp-cluster:8080"
+            ],
+            "priority": 3,
+            "replica_count": 3,
+            "latency_ms": 60
+          }
+        ],
+        "edge_nodes": [
+          {
+            "id": "edge-nyc",
+            "location": "nyc",
+            "node": "edge-nyc.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 5
+          },
+          {
+            "id": "edge-london",
+            "location": "london",
+            "node": "edge-london.distore-system:8080",
+            "cache_only": true,
+            "latency_ms": 8
+          }
+        ],
+        "latency_thresholds": {
+          "local_threshold_ms": 20,
+          "cross_dc_threshold_ms": 100,
+          "edge_threshold_ms": 50
+        },
+        "cloud_providers": [
+          {
+            "name": "azure",
+            "region": "eastus",
+            "nodes": [
+              "distore-azure-cluster-0.distore-azure-cluster:8080",
+              "distore-azure-cluster-1.distore-azure-cluster:8080",
+              "distore-azure-cluster-2.distore-azure-cluster:8080"
+            ],
+            "config": {
+              "vm_size": "Standard_D2s_v3",
+              "availability_zone": "1"
+            }
+          }
+        ]
+      }
+    }
+---
+# Edge Nodes
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: distore-edge-nyc
+  namespace: distore-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: distore
+      component: edge-nyc
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: edge-nyc
+        edge-location: nyc
+    spec:
+      containers:
+      - name: distore-edge
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: EDGE_LOCATION
+          value: "nyc"
+        - name: CACHE_ONLY
+          value: "true"
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: cache
+          mountPath: /cache
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: config
+        configMap:
+          name: distore-edge-config
+      - name: cache
+        emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: distore-edge-london
+  namespace: distore-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: distore
+      component: edge-london
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: edge-london
+        edge-location: london
+    spec:
+      containers:
+      - name: distore-edge
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: EDGE_LOCATION
+          value: "london"
+        - name: CACHE_ONLY
+          value: "true"
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: cache
+          mountPath: /cache
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: config
+        configMap:
+          name: distore-edge-config
+      - name: cache
+        emptyDir: {}
+---
+# Edge ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distore-edge-config
+  namespace: distore-system
+data:
+  config.json: |
+    {
+      "http_port": 8080,
+      "prometheus_port": 9090,
+      "data_dir": "/cache",
+      "replica_count": 1,
+      "nodes": [],
+      "auth": {
+        "enabled": false
+      },
+      "tls": {
+        "enabled": false
+      },
+      "multi_cloud": {
+        "enabled": true,
+        "data_centers": [],
+        "edge_nodes": [],
+        "latency_thresholds": {
+          "local_threshold_ms": 5,
+          "cross_dc_threshold_ms": 100,
+          "edge_threshold_ms": 50
+        },
+        "cloud_providers": []
+      }
+    }
+

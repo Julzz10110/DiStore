@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: distore-system
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distore-cluster
+  namespace: distore-system
+spec:
+  serviceName: distore-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app: distore
+      component: cluster
+  template:
+    metadata:
+      labels:
+        app: distore
+        component: cluster
+    spec:
+      containers:
+      - name: distore
+        image: distore/server:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONFIG_PATH
+          value: /etc/distore/config.json
+        volumeMounts:
+        - name: config
+          mountPath: /etc/distore
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: config
+        configMap:
+          name: distore-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: distore-data-$(POD_NAME)
+  volumeClaimTemplates:
+  - metadata:
+      name: distore-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: managed-premium
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: distore-cluster
+  namespace: distore-system
+spec:
+  selector:
+    app: distore
+    component: cluster
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: distore-config
+  namespace: distore-system
+data:
+  config.json: |
+    {
+      "http_port": 8080,
+      "prometheus_port": 9090,
+      "data_dir": "/data",
+      "replica_count": 3,
+      "nodes": [
+        "distore-cluster-0.distore-cluster:8080",
+        "distore-cluster-1.distore-cluster:8080",
+        "distore-cluster-2.distore-cluster:8080"
+      ],
+      "auth": {
+        "enabled": false
+      },
+      "tls": {
+        "enabled": false
+      },
+      "multi_cloud": {
+        "enabled": true,
+        "data_centers": [
+          {
+            "id": "eastus",
+            "region": "eastus",
+            "nodes": [
+              "distore-cluster-0.distore-cluster:8080",
+              "distore-cluster-1.distore-cluster:8080",
+              "distore-cluster-2.distore-cluster:8080"
+            ],
+            "priority": 1,
+            "replica_count": 3,
+            "latency_ms": 20
+          }
+        ],
+        "edge_nodes": [],
+        "latency_thresholds": {
+          "local_threshold_ms": 20,
+          "cross_dc_threshold_ms": 100,
+          "edge_threshold_ms": 50
+        },
+        "cloud_providers": [
+          {
+            "name": "azure",
+            "region": "eastus",
+            "nodes": [
+              "distore-cluster-0.distore-cluster:8080",
+              "distore-cluster-1.distore-cluster:8080",
+              "distore-cluster-2.distore-cluster:8080"
+            ],
+            "config": {
+              "vm_size": "Standard_D2s_v3",
+              "availability_zone": "1"
+            }
+          }
+        ]
+      }
+    }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: distore-cluster-pdb
+  namespace: distore-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: distore
+      component: cluster
+
